@@ -4,106 +4,124 @@ from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import engine as E
 
-st.set_page_config(page_title="منصة الحبي", page_icon="🔶", layout="wide")
+# 1. إعدادات الصفحة الأساسية
+st.set_page_config(page_title="منصة الحبي", page_icon="🔶", layout="wide", initial_sidebar_state="collapsed")
 
-# ألوان ثابتة
-BG="#0A0E14"; CARD="#121821"; BL="#D4AF37"; GR="#10B981"; RD="#EF4444"; TXT="#E2E8F5"
+# 2. تعريف المخازن (Session State) لكي لا تضيع البيانات عند التنقل
+_DEFAULTS = {
+    "theme":"dark","market_tab":"US","main_tab":"الرئيسية",
+    "radar_df":None,"radar_ts":None
+}
+for k,v in _DEFAULTS.items():
+    if k not in st.session_state: st.session_state[k]=v
+
+# 3. الألوان والتنسيق (CSS) الذي اخترته أنت
+BG="#0A0E14"; CARD="#121821"; BRD="#1E293B"; TXT="#E2E8F5"; BL="#D4AF37"; GR="#10B981"; RD="#EF4444"; AM="#F59E0B"
 
 st.markdown(f"""
 <style>
-body{{background:{BG};color:{TXT};direction:rtl;font-family:'Tajawal',sans-serif;}}
-.card{{background:{CARD};border-radius:12px;padding:15px;margin:8px 0;border-right:4px solid #333;}}
-.card.long{{border-right-color:{GR};}}
-.card.short{{border-right-color:{RD};}}
+@import url('https://fonts.googleapis.com/css2?family=Tajawal:wght@400;700;800&display=swap');
+html,body{{background:{BG}!important;font-family:'Tajawal',sans-serif!important;color:{TXT}!important;direction:rtl!important;}}
+.main.block-container{{padding:0!important;max-width:100%!important;}}
+[data-testid="stSidebar"]{{display:none!important;}}
+.trade-card{{background:{CARD};border:1px solid {BRD};border-radius:14px;padding:16px;margin-bottom:12px;}}
+.trade-card.long{{border-right:4px solid {GR};}}
+.trade-card.short{{border-right:4px solid {RD};}}
+.trade-card.wait{{border-right:4px solid {AM};}}
+.trade-card.closed{{border-right:4px solid #64748B;opacity:0.7;}}
 </style>
 """, unsafe_allow_html=True)
 
-if "radar_df" not in st.session_state: st.session_state.radar_df = None
-
-@st.cache_data(ttl=300)
+# 4. دالة جلب البيانات من المحرك (Engine)
 def _row(t,s):
-    try: r=E.run_engine(t,s); return E.extract_row(r[0],t,s)
-    except: return E.extract_row(None,t,s)
+    try: 
+        r=E.run_engine(t,s)
+        return E.extract_row(r[0],t,s)
+    except: 
+        return E.extract_row(None,t,s)
 
-# قوائم
-US = [(t,"QQQ") for t in ["MSFT","GOOGL","TSLA","AAPL","NVDA","META","AMZN","ORCL"]]
-SA = [("2222","2222"),("1120","2222"),("2010","2222")]
+def do_scan(watchlist):
+    total=len(watchlist); res=[]
+    pb=st.progress(0,text="جارٍ المسح...")
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        futs={pool.submit(_row,p[0],p[1]):p for p in watchlist}
+        for i,f in enumerate(as_completed(futs)):
+            r=f.result()
+            res.append(r)
+            pb.progress((i+1)/total)
+    pb.empty()
+    df=pd.DataFrame(res)
+    # ترتيب البيانات
+    if not df.empty and "_grade_rank" in df.columns:
+        df = df.sort_values(by=["_grade_rank"], ascending=True)
+    st.session_state.radar_df=df
+    st.success(f"✅ اكتمل مسح {len(df)} سهم")
 
-st.title("🔶 منصة الحبي")
+# 5. الهيدر (رأس الصفحة)
+st.markdown(f"""<div style="background:{CARD};padding:14px 32px;border-bottom:2px solid {BL};display:flex;justify-content:space-between;">
+<div style="display:flex;gap:10px;align-items:center;"><div style="width:40px;height:40px;background:{BL};border-radius:10px;display:flex;align-items:center;justify-content:center;font-weight:900;color:#000;">ح</div>
+<div style="font-weight:800;">AL7EBI ICT</div></div><div style="color:{BL};">{datetime.now().strftime("%H:%M:%S")}</div></div>""", unsafe_allow_html=True)
 
-# ===== التبويبات الأربعة =====
-tab1, tab2, tab3, tab4 = st.tabs(["🏠 الرئيسية", "🎯 الأوبشن", "📋 الخطة", "📊 المصفوفة"])
+# 6. أزرار التبويبات
+tabs=st.columns(4)
+menu = ["الرئيسية","الأوبشن","الخطة","المصفوفة"]
+for i,name in enumerate(menu):
+    with tabs[i]:
+        if st.button(name,use_container_width=True,type="primary" if st.session_state.main_tab==name else "secondary"):
+            st.session_state.main_tab=name
+            st.rerun()
 
-# ===== 1- الرئيسية =====
-with tab1:
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("🇺🇸 أمريكي", use_container_width=True): st.session_state.market="US"
-    with col2:
-        if st.button("🇸🇦 سعودي", use_container_width=True): st.session_state.market="SA"
+# 7. قائمة الأسهم
+US_WATCHLIST=[(t,"QQQ") for t in ["MSFT","GOOGL","TSLA","AAPL","NVDA","META"]]
+watchlist = US_WATCHLIST
 
-    market = st.session_state.get("market","US")
-    wl = US if market=="US" else SA
+st.markdown('<div style="padding:20px 32px;">',unsafe_allow_html=True)
 
-    if st.button("📡 مسح الرادار", type="primary"):
-        res=[]
-        with st.spinner("يحلل..."):
-            with ThreadPoolExecutor(max_workers=4) as p:
-                for f in as_completed([p.submit(_row,t,s) for t,s in wl]): res.append(f.result())
-        st.session_state.radar_df = pd.DataFrame(res)
-        st.success(f"تم {len(res)} سهم")
+# --- تبويب الرئيسية ---
+if st.session_state.main_tab=="الرئيسية":
+    if st.button("📡 مسح الرادار",type="primary"): 
+        do_scan(watchlist)
 
-    df = st.session_state.radar_df
+    df=st.session_state.radar_df
     if df is not None:
         for _,r in df.iterrows():
-            bias = r.get("Bias","Long")
-            cls = "long" if bias=="Long" else "short"
-            st.markdown(f"""<div class="card {cls}">
-                <b>{r.get('Ticker')}</b> | {r.get('Grade')} | {'شراء' if bias=='Long' else 'بيع'}<br>
-                دخول: {r.get('Entry','—')} | هدف: {r.get('TP1','—')}
+            grd=r.get("Grade","?")
+            bias=r.get("Bias","Long")
+            if grd in ["A+","A"]: cls="long" if bias=="Long" else "short"
+            elif grd=="B": cls="wait"
+            else: cls="closed"
+
+            st.markdown(f"""<div class="trade-card {cls}">
+                <b>{r.get('Ticker')}</b> | {grd} | {'شراء' if bias=='Long' else 'بيع'} | دخول: {r.get('Entry')}
             </div>""", unsafe_allow_html=True)
 
-# ===== 2- الأوبشن =====
-with tab2:
-    st.subheader("توصيات الأوبشن")
-    df = st.session_state.radar_df
-    if df is None:
-        st.warning("امسح الرادار من الرئيسية أولاً")
+# --- تبويب الأوبشن ---
+elif st.session_state.main_tab=="الأوبشن":
+    st.write("### 🎯 توصيات الأوبشن")
+    df=st.session_state.radar_df
+    if df is None: 
+        st.warning("الرجاء الضغط على 'مسح الرادار' في الصفحة الرئيسية أولاً")
     else:
-        for _,r in df.iterrows():
-            if r.get("Grade") in ["A+","A","B"]:
-                is_call = r.get("Bias")=="Long"
-                color = GR if is_call else RD
-                st.markdown(f"<div style='background:{CARD};padding:10px;margin:5px;border-right:4px solid {color};border-radius:8px;'>{r.get('Ticker')} - {'CALL' if is_call else 'PUT'} - {r.get('Entry')}</div>", unsafe_allow_html=True)
+        for _,r in df[df["Grade"].isin(["A+","A","B"])].iterrows():
+            color = GR if r.get("Bias")=="Long" else RD
+            st.write(f"Sighal: {r['Ticker']} - {'CALL' if r.get('Bias')=='Long' else 'PUT'}")
 
-# ===== 3- الخطة =====
-with tab3:
-    st.subheader("الخطة اليومية")
-    df = st.session_state.radar_df
-    if df is None:
-        st.warning("امسح الرادار أولاً")
+# --- تبويب الخطة ---
+elif st.session_state.main_tab=="الخطة":
+    st.write("### 📋 خطة التداول")
+    df=st.session_state.radar_df
+    if df is None: 
+        st.warning("لا توجد بيانات، اذهب للرئيسية وامسح السوق")
     else:
-        f = st.radio("فلتر", ["الكل","نشط","منتظر"], horizontal=True)
-        d = df.copy()
-        if f=="نشط": d = d[d["Grade"].isin(["A+","A"])]
-        if f=="منتظر": d = d[d["Grade"]=="B"]
-        st.dataframe(d[["Ticker","Grade","Bias","Entry","SL","TP1"]], use_container_width=True, hide_index=True)
+        st.table(df[["Ticker", "Grade", "Bias", "Entry"]])
 
-# ===== 4- المصفوفة =====
-with tab4:
-    st.subheader("مصفوفة القوة")
-    df = st.session_state.radar_df
-    if df is None:
-        st.warning("امسح الرادار أولاً")
+# --- تبويب المصفوفة ---
+elif st.session_state.main_tab=="المصفوفة":
+    st.write("### 📊 مصفوفة الأسهم")
+    df=st.session_state.radar_df
+    if df is None: 
+        st.warning("لا توجد بيانات")
     else:
-        tf = st.selectbox("الفريم", ["1D","4H","1H","15m"])
-        data = []
-        for _,r in df.iterrows():
-            data.append({
-                "الأصل": r.get("Ticker"),
-                "القوة": "★★★" if r.get("Grade") in ["A+","A"] else "★★",
-                "الاتجاه": "صاعد" if r.get("Bias")=="Long" else "هابط",
-                "الهدف": r.get("TP1"),
-                "الفريم": tf
-            })
-        st.dataframe(pd.DataFrame(data), use_container_width=True, hide_index=True)
+        st.dataframe(df[["Ticker", "Grade", "TP1"]], use_container_width=True)
+
+st.markdown('</div>',unsafe_allow_html=True)
